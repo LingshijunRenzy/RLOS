@@ -1,0 +1,7 @@
+*.elf
+*.o
+*.bin
+*.img
+*.log
+.DS_Store
+.vscode

@@ -40,10 +40,10 @@ start:
 dap:
     db 0x10 ; size of packet
     db 0    ; reserved
-    dw 16   ; sectors to read
+    dw 64   ; sectors to read (increase to load full bootloader)
     dw 0x8000 ; destination offset
     dw 0x0000 ; destination segment
-    dq 1    ; LBA start
+    dq 1    ; LBA start (bootloader begins at sector 1)
 
 disk_error_msg db 'Disk read error!', 0
 

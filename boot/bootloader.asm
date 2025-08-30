@@ -16,6 +16,14 @@ start:
     mov si, bootloader_welcome_msg
     call print_string_16
 
+    ; --- Read kernel into low memory buffer (0x10000) using BIOS EDD ---
+    ; We will later copy it to 0x200000 in protected mode
+    mov si, kernel_dap
+    mov ah, 0x42
+    mov dl, 0x80
+    int 0x13
+    jc kernel_read_error
+
     ; --- Switch to protected mode ---
     cli
     ; Mask all PIC interrupts
@@ -47,6 +55,11 @@ print_string_16:
 .done:
     ret
 
+kernel_read_error:
+    ; On error, just halt (could print, but keep minimal)
+    cli
+    hlt
+
 ; === 32-bit Protected Mode ===
 bits 32
 protected_mode_start:
@@ -57,6 +70,14 @@ protected_mode_start:
     mov gs, ax
     mov ss, ax
     mov esp, 0x90000 ; Set up stack high in memory
+
+    ; Copy kernel from 0x00010000 -> 0x00200000 (identity mapping before paging)
+    ; KERNEL_SECTORS * 512 bytes
+    mov esi, 0x00010000
+    mov edi, 0x00200000
+    mov ecx, KERNEL_SECTORS * 512 / 4
+    cld
+    rep movsd
 
     call check_long_mode_support
     call setup_paging
@@ -123,6 +144,8 @@ setup_paging:
     mov dword [pdpt_table], pdt_table + 3
     ; PDT[0] -> 2MB page at 0x0
     mov dword [pdt_table], 0x00000083 ; 2MB page, present, r/w
+    ; PDT[1] -> 2MB page at 0x200000
+    mov dword [pdt_table + 8], 0x00200083 ; map 0x200000-0x3FFFFF
     ret
 
 ; === 64-bit Long Mode ===
@@ -170,15 +193,14 @@ long_mode_64:
     mov fs, ax
     mov gs, ax
     mov ss, ax
-    mov rsp, 0x200000 ; Stack in mapped memory
+    mov rsp, 0x400000 ; Stack just above second 2MB mapping (push stays < 0x400000)
 
     mov rsi, success_msg
     call print_string_64
 
-.halt:
-    cli
-    hlt
-    jmp .halt
+    ; Jump to loaded kernel at 0x200000
+    mov rax, 0x0000000000200000
+    jmp rax
 
 ; === Data and Tables ===
 bits 16
@@ -238,6 +260,20 @@ idt_descriptor:
 bootloader_welcome_msg db 'Bootloader loaded at 0x8000', 13, 10, 0
 success_msg db 'Successfully switched to 64-bit long mode!', 13, 10, 0
 check_lm_fail_msg db 'Long Mode not supported. Halting.', 0
+
+; Kernel disk parameters
+KERNEL_LBA      equ 17
+KERNEL_SECTORS  equ 128
+
+; Disk Address Packet (for kernel read to 0x10000)
+align 4
+kernel_dap:
+    db 0x10          ; size of packet
+    db 0x00          ; reserved
+    dw KERNEL_SECTORS
+    dw 0x0000        ; offset
+    dw 0x1000        ; segment (0x1000:0x0000 -> 0x10000)
+    dq KERNEL_LBA    ; starting LBA (kernel starts at sector 17)
 
 ; Aligned page tables
 align 4096
