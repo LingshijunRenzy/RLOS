@@ -1,8 +1,41 @@
+# Compiled binaries and executables
 *.elf
-*.o
+*.efi
 *.bin
 *.img
 *.iso
+
+# Object files and libraries
+*.o
+*.so
+*.a
+
+# Build directories
+build/
+esp/
+
+# GNU-EFI compiled artifacts
+gnu-efi-*/*/
+
+# QEMU and UEFI runtime files
+*.fd
+*.dtb
 *.log
+AAVMF_VARS_copy.fd
+qemu.log
+virt.dtb
+
+# Temporary and backup files
+*.tmp
+*.swp
+*~
 .DS_Store
-.vscode
+
+# IDE and editor files
+.vscode/
+.idea/
+*.code-workspace
+
+# Other common artifacts
+core
+core.*

@@ -1,89 +1,121 @@
-CROSS ?= x86_64-elf-
-CC      := $(CROSS)gcc
-AS      := $(CROSS)gcc
-LD      := $(CROSS)ld
-OBJCOPY := $(CROSS)objcopy
-GRUBMKRESCUE ?= grub-mkrescue
+# RLOS - ARM64 UEFI Kernel Makefile
+# Based on GNU-EFI library
 
-# Auto-detect Homebrew cross prefix variant if grub-mkrescue not in PATH
-ifeq (,$(shell command -v $(GRUBMKRESCUE) 2>/dev/null))
-	GRUBMKRESCUE := x86_64-elf-grub-mkrescue
-endif
+# Compiler settings
+ARCH            = aarch64
+CROSS_COMPILE   = aarch64-linux-gnu-
+CC              = $(CROSS_COMPILE)gcc
+LD              = $(CROSS_COMPILE)ld
+OBJCOPY         = $(CROSS_COMPILE)objcopy
+SIZE            = $(CROSS_COMPILE)size
 
-CFLAGS := -ffreestanding -O2 -Wall -Wextra -mno-red-zone -mcmodel=kernel -fno-stack-protector -fno-pic -fno-plt -nostdlib -nostdinc -fno-builtin -fno-exceptions -I include
-CFLAGS += -MMD -MP
-LDFLAGS := -nostdlib -z max-page-size=0x1000 -T linker.ld
+# GNU-EFI paths
+GNUEFI_DIR      = gnu-efi-3.0.9
+GNUEFI_INC      = $(GNUEFI_DIR)/inc
+GNUEFI_INC_ARCH = $(GNUEFI_DIR)/inc/$(ARCH)
+GNUEFI_LIB_DIR  = $(GNUEFI_DIR)/$(ARCH)/lib
+GNUEFI_GNUEFI_DIR = $(GNUEFI_DIR)/$(ARCH)/gnuefi
+GNUEFI_CRT_OBJS = $(GNUEFI_GNUEFI_DIR)/crt0-efi-$(ARCH).o
 
-SRC_ASM := $(wildcard src/boot/*.S)
-SRC_C   := $(wildcard src/kernel/*.c)
-OBJ     := $(patsubst %.S, build/%.o, $(SRC_ASM)) $(patsubst %.c, build/%.o, $(SRC_C))
-DEP     := $(OBJ:.o=.d)
+# Directories
+SRC_DIR         = src/kernel
+BUILD_DIR       = build
+INCLUDE_DIR     = include
 
-ISO_ROOT := iso_root
-ISO_KERNEL_PATH := $(ISO_ROOT)/boot/kernel.elf
-ISO_IMAGE := RLOS.iso
+# Output files
+EFI_TARGET      = $(BUILD_DIR)/RLOS.efi
+SO_TARGET       = $(BUILD_DIR)/RLOS.so
+KERNEL_OBJ      = $(BUILD_DIR)/kernel.o
 
-.PHONY: all run run-uefi run-bios debug clean distclean
+# Compiler flags for UEFI
+CPPFLAGS        = -I$(GNUEFI_INC) -I$(GNUEFI_INC_ARCH) -I$(INCLUDE_DIR) \
+                  -DEFI_FUNCTION_WRAPPER -DGNU_EFI_USE_MS_ABI
 
-all: $(ISO_IMAGE)
+CFLAGS          = -ffreestanding -fno-stack-protector -fpic \
+                  -fshort-wchar -mgeneral-regs-only -mcpu=cortex-a57 \
+                  -Wall -Wextra -Werror -std=c11 -O2
 
-$(ISO_IMAGE): $(ISO_KERNEL_PATH) iso_root/boot/grub/grub.cfg
-	$(GRUBMKRESCUE) -o $@ $(ISO_ROOT)
+# Linker settings
+LDSCRIPT        = $(GNUEFI_DIR)/gnuefi/elf_$(ARCH)_efi.lds
+LDFLAGS         = -nostdlib -znocombreloc -T $(LDSCRIPT) -shared -Bsymbolic \
+                  --defsym=EFI_SUBSYSTEM=0xa -s \
+                  -L $(GNUEFI_LIB_DIR) -L $(GNUEFI_GNUEFI_DIR)
 
-$(ISO_KERNEL_PATH): build/kernel.elf
-	@mkdir -p $(dir $@)
-	cp $< $@
+# Default target
+.PHONY: all clean run debug
 
-build/kernel.elf: $(OBJ) linker.ld
-	$(LD) $(LDFLAGS) -o $@ $(OBJ)
+all: $(EFI_TARGET)
 
-build/%.o: %.S
-	@mkdir -p $(dir $@)
-	$(AS) $(CFLAGS) -c $< -o $@
+# Build GNU-EFI library first
+$(GNUEFI_LIB_DIR)/libefi.a $(GNUEFI_GNUEFI_DIR)/libgnuefi.a:
+	$(MAKE) -C $(GNUEFI_DIR) ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE)
 
-build/%.o: %.c
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+# Create build directory
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
 
-################################################################################
-# Run Targets
-# Default 'run' will prefer UEFI if OVMF firmware is found, else fall back to BIOS.
-################################################################################
+# Compile kernel source
+$(KERNEL_OBJ): $(SRC_DIR)/kernel.c | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-# Try to locate OVMF (Homebrew edk2-ovmf path). Users can override by exporting OVMF_CODE / OVMF_VARS.
-OVMF_CODE ?= $(shell test -f /opt/homebrew/opt/edk2-ovmf/share/edk2-ovmf/x64/OVMF_CODE.fd && echo /opt/homebrew/opt/edk2-ovmf/share/edk2-ovmf/x64/OVMF_CODE.fd)
-OVMF_VARS ?= $(shell test -f /opt/homebrew/opt/edk2-ovmf/share/edk2-ovmf/x64/OVMF_VARS.fd && echo /opt/homebrew/opt/edk2-ovmf/share/edk2-ovmf/x64/OVMF_VARS.fd)
+# Link to create shared object
+$(SO_TARGET): $(KERNEL_OBJ) $(GNUEFI_LIB_DIR)/libefi.a $(GNUEFI_GNUEFI_DIR)/libgnuefi.a
+	$(LD) $(LDFLAGS) $(GNUEFI_CRT_OBJS) $(KERNEL_OBJ) -o $@ \
+		-lgnuefi -lefi
 
-run: $(ISO_IMAGE)
-ifeq (,$(OVMF_CODE))
-	@echo "[run] OVMF not found -> using legacy BIOS mode (SeaBIOS)."
-	qemu-system-x86_64 -cdrom $(ISO_IMAGE) -serial stdio
-else
-	@echo "[run] Using UEFI OVMF firmware: $(OVMF_CODE)"
-	qemu-system-x86_64 -machine q35 -m 512 -bios $(OVMF_CODE) -cdrom $(ISO_IMAGE) -serial stdio
-endif
+# Convert to EFI executable  
+$(EFI_TARGET): $(SO_TARGET)
+	$(OBJCOPY) -j .text -j .sdata -j .data -j .dynamic -j .dynsym \
+		-j .rel -j .rela -j .rel.* -j .rela.* -j .reloc \
+		-O binary $< $@
+	$(SIZE) $<
+	@echo ""
+	@echo "EFI application built successfully: $@"
+	@echo ""
 
-run-bios: $(ISO_IMAGE)
-	qemu-system-x86_64 -cdrom $(ISO_IMAGE) -serial stdio
+# Run with QEMU
+run: $(EFI_TARGET)
+	@if [ ! -f /usr/share/AAVMF/AAVMF_CODE.fd ]; then \
+		echo "ARM64 UEFI firmware not found. Install with:"; \
+		echo "sudo apt install qemu-efi-aarch64"; \
+		exit 1; \
+	fi
+	@if [ ! -f AAVMF_VARS_copy.fd ]; then \
+		cp /usr/share/AAVMF/AAVMF_VARS.fd AAVMF_VARS_copy.fd; \
+	fi
+	@mkdir -p esp/EFI/BOOT
+	@cp $(EFI_TARGET) esp/EFI/BOOT/BOOTAA64.EFI
+	qemu-system-aarch64 \
+		-machine virt,gic-version=3 \
+		-cpu cortex-a57 \
+		-m 512 \
+		-drive if=pflash,format=raw,file=/usr/share/AAVMF/AAVMF_CODE.fd,readonly=on \
+		-drive if=pflash,format=raw,file=./AAVMF_VARS_copy.fd \
+		-drive file=fat:rw:esp,format=raw \
+		-nographic
 
-run-uefi: $(ISO_IMAGE)
-ifndef OVMF_CODE
-	@echo "OVMF_CODE not set or file missing. Install edk2-ovmf (e.g. 'brew install edk2-ovmf') or export OVMF_CODE path." && exit 1
-endif
-	qemu-system-x86_64 -machine q35 -m 512 -bios $(OVMF_CODE) -cdrom $(ISO_IMAGE) -serial stdio
+# Debug version
+debug: CFLAGS += -g -DDEBUG
+debug: $(EFI_TARGET)
 
-# debug: wait for gdb (target remote localhost:1234)
-# Use: $(CROSS)gdb build/kernel.elf -ex 'target remote localhost:1234'
-
-debug: $(ISO_IMAGE)
-	qemu-system-x86_64 -cdrom $(ISO_IMAGE) -serial stdio -s -S
-
+# Clean build artifacts
 clean:
-	rm -rf build/*.o build/**/*.o build/*.d build/**/*.d build/kernel.elf $(ISO_KERNEL_PATH)
+	rm -rf $(BUILD_DIR) esp
+	rm -f AAVMF_VARS_copy.fd
+	$(MAKE) -C $(GNUEFI_DIR) clean
 
-# Deep clean including ISO
-
-distclean: clean
-	rm -f $(ISO_IMAGE)
-
--include $(DEP)
+# Show help
+help:
+	@echo "RLOS Build System"
+	@echo ""
+	@echo "Targets:"
+	@echo "  all     - Build the EFI application (default)"
+	@echo "  run     - Build and run with QEMU"
+	@echo "  debug   - Build debug version"
+	@echo "  clean   - Clean all build artifacts"
+	@echo "  help    - Show this help message"
+	@echo ""
+	@echo "Requirements:"
+	@echo "  - aarch64-linux-gnu-gcc toolchain"
+	@echo "  - qemu-system-aarch64"
+	@echo "  - qemu-efi-aarch64 (for UEFI firmware)"

@@ -1,34 +1,118 @@
-#include <stdint.h>
+//==================================================================================================================================
+//  RLOS: Simple ARM64 UEFI Kernel
+//==================================================================================================================================
+//
+// A simple "Hello, Kernel!" program that runs as a UEFI application on ARM64.
+// Based on the Simple UEFI Bootloader project structure.
+//
 
-static volatile uint16_t *const VGA_BUFFER = (uint16_t *)0xB8000;
-static const int VGA_COLS = 80;
-static const int VGA_ROWS = 25;
+#include <efi.h>
+#include <efilib.h>
 
-static uint16_t vga_entry(char c, uint8_t color)
+//==================================================================================================================================
+//  efi_main: UEFI Application Entry Point
+//==================================================================================================================================
+//
+// This is the standard UEFI application entry point. UEFI firmware will call this function
+// when our application is loaded.
+//
+
+EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 {
-    return (uint16_t)c | ((uint16_t)color << 8);
-}
+    // ImageHandle is this program's own EFI_HANDLE
+    // SystemTable is the EFI system table of the machine
 
-void kernel_main(void)
-{
-    const char *msg = "Hello, Kernel!";
-    uint8_t color = 0x07; /* light grey on black */
+    // Initialize the GNU-EFI library
+    InitializeLib(ImageHandle, SystemTable);
+    /*
+    From InitializeLib:
+    ST = SystemTable;
+    BS = SystemTable->BootServices;
+    RT = SystemTable->RuntimeServices;
+    */
 
-    /* Clear first line then write */
-    for (int i = 0; i < VGA_COLS; ++i)
+    EFI_STATUS Status;
+
+    // Disable watchdog timer to prevent automatic reboot during debugging
+    Status = BS->SetWatchdogTimer(0, 0, 0, NULL);
+    if(EFI_ERROR(Status))
     {
-        VGA_BUFFER[i] = vga_entry(' ', color);
+        Print(L"Error stopping watchdog, timeout still counting down...\r\n");
     }
 
-    int x = 0;
-    while (msg[x] != '\0')
+    // Clear the screen
+    Status = ST->ConOut->ClearScreen(ST->ConOut);
+    if(EFI_ERROR(Status))
     {
-        VGA_BUFFER[x] = vga_entry(msg[x], color);
-        x++;
+        Print(L"Error clearing screen...\r\n");
     }
 
-    for (;;)
+    // Print our hello message
+    Print(L"\r\n");
+    Print(L"==============================================\r\n");
+    Print(L"         RLOS - ARM64 UEFI Kernel            \r\n");
+    Print(L"==============================================\r\n");
+    Print(L"\r\n");
+    Print(L"Hello, Kernel!\r\n");
+    Print(L"\r\n");
+
+    // Print system information
+    Print(L"System Information:\r\n");
+    Print(L"  UEFI Revision: %u.%u", ST->Hdr.Revision >> 16, (ST->Hdr.Revision & 0xFFFF) / 10);
+    if((ST->Hdr.Revision & 0xFFFF) % 10)
     {
-        __asm__ __volatile__("hlt");
+        Print(L".%u\r\n", (ST->Hdr.Revision & 0xFFFF) % 10);
     }
+    else
+    {
+        Print(L"\r\n");
+    }
+    Print(L"  Firmware Vendor: %s\r\n", ST->FirmwareVendor);
+    Print(L"  Firmware Revision: 0x%08x\r\n", ST->FirmwareRevision);
+
+    // Get current time
+    EFI_TIME Now;
+    Status = RT->GetTime(&Now, NULL);
+    if(!EFI_ERROR(Status))
+    {
+        Print(L"  Current Time: %02hhu/%02hhu/%04hu - %02hhu:%02hhu:%02hhu\r\n", 
+              Now.Month, Now.Day, Now.Year, Now.Hour, Now.Minute, Now.Second);
+    }
+
+    Print(L"\r\n");
+    Print(L"Kernel initialization completed successfully!\r\n");
+    Print(L"RLOS is now running...\r\n");
+    Print(L"\r\n");
+    Print(L"System Status: ACTIVE\r\n");
+    Print(L"Kernel Mode: Running\r\n");
+    Print(L"Boot Services: Available\r\n");
+    Print(L"\r\n");
+    Print(L"=== RLOS Kernel Main Loop Started ===\r\n");
+    Print(L"(Press Ctrl+C or close QEMU to exit)\r\n");
+    Print(L"\r\n");
+
+    // Main kernel loop - like a real OS
+    UINTN counter = 0;
+    while(1)
+    {
+        // Heartbeat every 30 seconds
+        if(counter % 300 == 0)  // 300 * 100ms = 30 seconds
+        {
+            Print(L"[KERNEL] Heartbeat - System uptime: %llu cycles\r\n", counter / 10);
+        }
+        
+        // Small delay to prevent overwhelming output
+        BS->Stall(100000); // 100ms delay
+        counter++;
+        
+        // In a real kernel, this is where we would:
+        // - Handle interrupts
+        // - Process scheduler
+        // - Memory management
+        // - I/O operations
+        // - System calls
+    }
+
+    // This line should never be reached in normal operation
+    return EFI_SUCCESS;
 }

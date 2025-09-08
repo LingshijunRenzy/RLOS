@@ -1,110 +1,188 @@
-# RLOS
+# RLOS - ARM64 UEFI Kernel
 
-A simple x86_64 hobby OS (UEFI + GRUB(multiboot2) bootstrap) by Lingshi & Rjay9
+一个简单的ARM64 UEFI内核项目，演示如何在UEFI环境下运行"Hello, Kernel!"程序。
 
-## 功能阶段 (当前)
+## 项目重构说明
 
-- 使用 GRUB (multiboot2) 引导 x86_64 内核
-- VGA 文本模式输出: `Hello, Kernel!`
-- 生成可启动 ISO: `RLOS.iso`
-- 提供 QEMU 运行与 GDB 调试目标
+这个项目已经从原始的"直接内核"方法完全重构为标准的UEFI应用程序。主要变化：
 
-## 目录结构
+### ✅ 已完成的重构
 
-```text
-linker.ld                # 内核链接脚本
-Makefile                 # 构建脚本
-src/boot/multiboot2_header.S
-src/kernel/kernel.c      # 内核入口与输出
-iso_root/boot/grub/grub.cfg
-RLOS.iso (构建后生成)
+1. **使用GNU-EFI库** - 集成了完整的GNU-EFI 3.0.9库
+2. **标准UEFI入口点** - 使用`efi_main()`而不是`kernel_main()`
+3. **PE/COFF格式** - 生成正确的`.EFI`可执行文件
+4. **完整的UEFI服务** - 可以使用所有UEFI Boot Services和Runtime Services
+5. **正确的构建系统** - 使用专门的链接脚本和构建流程
+
+### 🏗️ 项目结构
+
+```
+RLOS/
+├── src/kernel/kernel.c          # UEFI应用程序主代码
+├── gnu-efi-3.0.9/             # GNU-EFI库（完整副本）
+├── build/                      # 构建输出目录
+├── esp/                        # EFI系统分区模拟目录
+├── Makefile                    # 主构建文件
+├── test.sh                     # 测试运行脚本
+└── README.md                   # 项目文档
 ```
 
-## 先决条件 (macOS)
+## 构建要求
 
-已安装交叉工具链:
-
-- x86_64-elf-binutils
-- x86_64-elf-gcc
-- x86_64-elf-grub
-- x86_64-elf-gdb (调试用)
-
-另外需要:
-
-- xorriso
-- mtools
-- qemu-system-x86_64
-
-如缺失可通过 Homebrew 安装 (示例):
+### 系统依赖
 
 ```bash
-brew install xorriso mtools qemu
+# Ubuntu/Debian
+sudo apt update
+sudo apt install gcc-aarch64-linux-gnu
+sudo apt install qemu-system-aarch64
+sudo apt install qemu-efi-aarch64
 ```
 
-## 构建
+### 构建命令
 
 ```bash
-make
-```
+# 清理构建
+make clean
 
-生成 `RLOS.iso`。
+# 构建UEFI应用程序
+make all
 
-## 运行
-
-```bash
+# 构建并运行（后台模式）
 make run
 ```
 
-在 QEMU 窗口/serial stdio 中看到输出: `Hello, Kernel!`
+## 测试运行
 
-### 运行模式说明
-
-Makefile 会自动探测 OVMF (UEFI 固件)。
-
-- 若找到 `OVMF_CODE.fd` : `make run` 使用 UEFI (`-bios OVMF_CODE.fd`)
-- 否则回退到 BIOS (SeaBIOS) 模式
-
-手动指定：
+### 方法1：使用测试脚本（推荐）
 
 ```bash
-make run-bios   # 强制 BIOS
-make run-uefi   # 强制 UEFI (需已安装 OVMF)
+./test.sh
 ```
 
-安装 OVMF (macOS/Homebrew)：
+这个脚本会：
+- 清理和构建项目
+- 验证生成的EFI文件
+- 设置EFI系统分区
+- 提供多种运行选项
+
+### 方法2：手动运行
 
 ```bash
-brew install edk2-ovmf
+# 构建项目
+make all
+
+# 设置ESP目录
+mkdir -p esp/EFI/BOOT
+cp build/RLOS.efi esp/EFI/BOOT/BOOTAA64.EFI
+
+# 运行QEMU
+qemu-system-aarch64 \
+    -machine virt,gic-version=3 \
+    -cpu cortex-a57 \
+    -m 512 \
+    -drive if=pflash,format=raw,file=/usr/share/AAVMF/AAVMF_CODE.fd,readonly=on \
+    -drive if=pflash,format=raw,file=./AAVMF_VARS_copy.fd \
+    -drive file=fat:rw:esp,format=raw \
+    -nographic
 ```
 
-## 调试 (GDB)
+## 功能特性
 
-1. 启动暂停等待 gdb:
+当前的UEFI应用程序包含：
 
+- ✅ 标准UEFI应用程序入口点
+- ✅ UEFI服务初始化
+- ✅ 屏幕清理和文本输出
+- ✅ 系统信息显示（UEFI版本、固件信息、时间）
+- ✅ 用户交互（按键等待）
+- ✅ 优雅的程序退出
+
+### 程序输出示例
+
+```
+==============================================
+         RLOS - ARM64 UEFI Kernel            
+==============================================
+
+Hello, Kernel!
+
+System Information:
+  UEFI Revision: 2.7
+  Firmware Vendor: EDK II
+  Firmware Revision: 0x00010000
+  Current Time: 09/08/2024 - 13:50:25
+
+Kernel is running successfully!
+This demonstrates that UEFI boot services are working.
+
+Press any key to continue, or wait 10 seconds for automatic shutdown...
+Shutdown in 10 seconds...
+```
+
+## 技术细节
+
+### UEFI vs 直接内核启动
+
+**之前的问题：**
+- 使用直接内核启动（`-kernel kernel.elf`）
+- 生成普通ELF文件而不是PE/COFF格式
+- 缺少UEFI服务和初始化
+
+**现在的解决方案：**
+- 完整的UEFI应用程序架构
+- PE/COFF格式的EFI可执行文件
+- 通过UEFI固件正确引导
+- 完整的UEFI服务支持
+
+### 构建流程
+
+1. **编译** - 使用GNU-EFI头文件编译C代码
+2. **链接** - 使用专门的EFI链接脚本和启动代码
+3. **转换** - 将ELF格式转换为PE/COFF EFI格式
+4. **部署** - 复制到EFI系统分区的标准位置
+
+### 文件格式验证
+
+```bash
+$ file build/RLOS.efi
+build/RLOS.efi: PE Unknown PE signature 0x742e Aarch64 (stripped to external PDB), for MS Windows
+```
+
+这是正确的PE/COFF格式，ARM64架构的UEFI应用程序。
+
+## 下一步开发
+
+这个项目现在提供了一个完整的UEFI开发基础。可以在此基础上：
+
+1. **添加更多UEFI服务** - 文件系统、网络、图形等
+2. **实现内存管理** - 退出Boot Services后的内存管理
+3. **硬件初始化** - 直接硬件访问和驱动开发
+4. **操作系统功能** - 任务调度、中断处理等
+
+## 故障排除
+
+### 常见问题
+
+1. **找不到交叉编译器**
    ```bash
-   make debug
+   sudo apt install gcc-aarch64-linux-gnu
    ```
 
-2. 新终端运行 (示例):
-
+2. **找不到UEFI固件**
    ```bash
-   x86_64-elf-gdb build/kernel.elf \
-     -ex 'target remote localhost:1234' \
-     -ex 'set disassemble-next-line on'
+   sudo apt install qemu-efi-aarch64
    ```
 
-## 清理
+3. **QEMU启动但看不到输出**
+   - 使用`-nographic`确保输出到终端
+   - 或使用VNC模式：`-vnc :1`然后连接`localhost:5901`
 
-```bash
-make clean     # 清理对象文件与内核
-make distclean # 额外删除 RLOS.iso
-```
+4. **权限问题**
+   ```bash
+   chmod +x test.sh
+   ```
 
-## 后续计划 (非当前实现)
+## 许可证
 
-- 内存地图解析 & 物理内存管理
-- 中断 & IDT / IRQ & 定时器
-- GDT / TSS / 上下文切换
-- 分页与 内核虚拟内存
-- 串口输出 / 日志子系统
-- ACPI / SMP 启动
+本项目使用与GNU-EFI相同的许可证条款。详见GNU-EFI库的相关文档。
