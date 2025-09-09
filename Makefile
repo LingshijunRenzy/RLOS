@@ -1,8 +1,10 @@
-# RLOS - ARM64 UEFI Kernel Makefile
-# Based on GNU-EFI library
-# Optimized for automatic source file discovery
+# RLOS - ARM64 Separated Build System
+# Complete separation of UEFI Bootloader and Kernel builds
+# Linus-style design: clean data structures, eliminate special cases
 
-# Compiler settings
+# =============================================================================
+# Compiler Settings
+# =============================================================================
 ARCH            = aarch64
 CROSS_COMPILE   = aarch64-linux-gnu-
 CC              = $(CROSS_COMPILE)gcc
@@ -10,7 +12,9 @@ LD              = $(CROSS_COMPILE)ld
 OBJCOPY         = $(CROSS_COMPILE)objcopy
 SIZE            = $(CROSS_COMPILE)size
 
-# GNU-EFI paths
+# =============================================================================
+# GNU-EFI Library Settings (bootloader only)
+# =============================================================================
 GNUEFI_DIR      = gnu-efi-3.0.9
 GNUEFI_INC      = $(GNUEFI_DIR)/inc
 GNUEFI_INC_ARCH = $(GNUEFI_DIR)/inc/$(ARCH)
@@ -18,110 +22,201 @@ GNUEFI_LIB_DIR  = $(GNUEFI_DIR)/$(ARCH)/lib
 GNUEFI_GNUEFI_DIR = $(GNUEFI_DIR)/$(ARCH)/gnuefi
 GNUEFI_CRT_OBJS = $(GNUEFI_GNUEFI_DIR)/crt0-efi-$(ARCH).o
 
-# Directories
+# =============================================================================
+# Directory Settings
+# =============================================================================
 SRC_DIR         = src
 BUILD_DIR       = build
-INCLUDE_DIR     = include
+INCLUDE_DIR     = src/include
 
-# Automatic source file discovery
-SRC_C_FILES     = $(shell find $(SRC_DIR) -name '*.c' 2>/dev/null)
-SRC_S_FILES     = $(shell find $(SRC_DIR) -name '*.S' 2>/dev/null)
-SRC_H_FILES     = $(shell find $(SRC_DIR) -name '*.h' 2>/dev/null)
-SRC_SUBDIRS     = $(shell find $(SRC_DIR) -type d 2>/dev/null)
+# Separated source directories
+BOOT_SRC_DIR    = $(SRC_DIR)/boot
+KERNEL_SRC_DIR  = $(SRC_DIR)/kernel
 
-# Generate include paths for all source subdirectories
-SRC_INCLUDE_DIRS = $(patsubst %,-I%,$(SRC_SUBDIRS))
+# Separated build directories  
+BOOT_BUILD_DIR  = $(BUILD_DIR)/boot
+KERNEL_BUILD_DIR = $(BUILD_DIR)/kernel
 
-# Generate object file paths (preserve directory structure in build/)
-OBJ_C_FILES     = $(SRC_C_FILES:$(SRC_DIR)/%.c=$(BUILD_DIR)/%.o)
-OBJ_S_FILES     = $(SRC_S_FILES:$(SRC_DIR)/%.S=$(BUILD_DIR)/%.o)
-ALL_OBJ_FILES   = $(OBJ_C_FILES) $(OBJ_S_FILES)
+# =============================================================================
+# Source file discovery - separated boot and kernel
+# =============================================================================
 
+# Boot related files (UEFI environment)
+BOOT_C_FILES    = $(shell find $(BOOT_SRC_DIR) -name '*.c' 2>/dev/null)
+BOOT_S_FILES    = $(shell find $(BOOT_SRC_DIR) -name '*.S' 2>/dev/null)
+BOOT_OBJ_FILES  = $(BOOT_C_FILES:$(BOOT_SRC_DIR)/%.c=$(BOOT_BUILD_DIR)/%.o) \
+                  $(BOOT_S_FILES:$(BOOT_SRC_DIR)/%.S=$(BOOT_BUILD_DIR)/%.o)
+
+# Kernel related files (bare metal environment)
+KERNEL_C_FILES  = $(shell find $(KERNEL_SRC_DIR) -name '*.c' 2>/dev/null)
+KERNEL_S_FILES  = $(shell find $(KERNEL_SRC_DIR) -name '*.S' 2>/dev/null)
+KERNEL_OBJ_FILES = $(KERNEL_C_FILES:$(KERNEL_SRC_DIR)/%.c=$(KERNEL_BUILD_DIR)/%.o) \
+                   $(KERNEL_S_FILES:$(KERNEL_SRC_DIR)/%.S=$(KERNEL_BUILD_DIR)/%.o)
+
+# =============================================================================
 # Output files
-EFI_TARGET      = $(BUILD_DIR)/RLOS.efi
-SO_TARGET       = $(BUILD_DIR)/RLOS.so
+# =============================================================================
+BOOTLOADER_EFI  = $(BUILD_DIR)/bootloader.efi
+BOOTLOADER_SO   = $(BUILD_DIR)/bootloader.so
+KERNEL_ELF      = $(BUILD_DIR)/kernel.elf
 
-# Debug output (can be enabled with make VERBOSE=1)
-ifdef VERBOSE
-$(info Source C files: $(SRC_C_FILES))
-$(info Source S files: $(SRC_S_FILES))
-$(info Source H files: $(SRC_H_FILES))
-$(info Object files: $(ALL_OBJ_FILES))
-$(info Include directories: $(SRC_INCLUDE_DIRS))
-endif
+# =============================================================================
+# Compile flags - separated UEFI and bare metal environments
+# =============================================================================
 
-# Compiler flags for UEFI
-CPPFLAGS        = -I$(GNUEFI_INC) -I$(GNUEFI_INC_ARCH) -I$(INCLUDE_DIR) \
-                  $(SRC_INCLUDE_DIRS) \
-                  -DEFI_FUNCTION_WRAPPER -DGNU_EFI_USE_MS_ABI
+# Bootloader compile flags (UEFI environment)
+BOOT_CPPFLAGS   = -I$(GNUEFI_INC) -I$(GNUEFI_INC_ARCH) -I$(INCLUDE_DIR) \
+                  -DEFI_FUNCTION_WRAPPER -DGNU_EFI_USE_MS_ABI \
+                  -DBOOT_STAGE
 
-CFLAGS          = -ffreestanding -fno-stack-protector -fpic \
+BOOT_CFLAGS     = -ffreestanding -fno-stack-protector -fpic \
                   -fshort-wchar -mgeneral-regs-only -mcpu=cortex-a57 \
                   -Wall -Wextra -Werror -std=c11 -O2
 
-# Linker settings
-LDSCRIPT        = $(GNUEFI_DIR)/gnuefi/elf_$(ARCH)_efi.lds
-LDFLAGS         = -nostdlib -znocombreloc -T $(LDSCRIPT) -shared -Bsymbolic \
+# Kernel compile flags (bare metal environment)
+KERNEL_CPPFLAGS = -I$(INCLUDE_DIR) -DKERNEL_STAGE -nostdlib
+
+KERNEL_CFLAGS   = -ffreestanding -fno-stack-protector -fno-builtin \
+                  -mgeneral-regs-only -mcpu=cortex-a57 \
+                  -Wall -Wextra -Werror -std=c11 -O2
+
+# =============================================================================
+# Linker Settings
+# =============================================================================
+
+# Bootloader linker settings (UEFI)
+BOOT_LDSCRIPT   = $(GNUEFI_DIR)/gnuefi/elf_$(ARCH)_efi.lds
+BOOT_LDFLAGS    = -nostdlib -znocombreloc -T $(BOOT_LDSCRIPT) -shared -Bsymbolic \
                   --defsym=EFI_SUBSYSTEM=0xa -s \
                   -L $(GNUEFI_LIB_DIR) -L $(GNUEFI_GNUEFI_DIR)
 
-# Default target
-.PHONY: all clean run debug show-sources show-dirs help
+# Kernel linker settings (bare metal)
+KERNEL_LDFLAGS  = -nostdlib -static -T kernel.lds
 
-all: $(EFI_TARGET)
+# =============================================================================
+# Build Targets
+# =============================================================================
+.PHONY: all clean run debug bootloader kernel show-info help
 
-# Build GNU-EFI library first
+# Build both separated targets by default
+all: bootloader kernel
+
+# Build bootloader
+bootloader: $(BOOTLOADER_EFI)
+
+# Build kernel  
+kernel: $(KERNEL_ELF)
+
+# =============================================================================
+# GNU-EFI Library Build
+# =============================================================================
 $(GNUEFI_LIB_DIR)/libefi.a $(GNUEFI_GNUEFI_DIR)/libgnuefi.a:
 	$(MAKE) -C $(GNUEFI_DIR) ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE)
 
-# Create build directories (automatically create subdirectories as needed)
-$(BUILD_DIR):
-	@mkdir -p $(BUILD_DIR)
-
-# Create subdirectories in build/ to match src/ structure
-$(BUILD_DIR)/%/:
+# =============================================================================
+# Directory Creation
+# =============================================================================
+$(BUILD_DIR) $(BOOT_BUILD_DIR) $(KERNEL_BUILD_DIR):
 	@mkdir -p $@
 
-# Pattern rule for compiling C files
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
-	@mkdir -p $(dir $@)
-	@echo "CC    $<"
-	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+# =============================================================================
+# Bootloader Build Rules
+# =============================================================================
 
-# Pattern rule for compiling assembly files
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.S
+# Compile bootloader C files
+$(BOOT_BUILD_DIR)/%.o: $(BOOT_SRC_DIR)/%.c | $(BOOT_BUILD_DIR)
 	@mkdir -p $(dir $@)
-	@echo "AS    $<"
-	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+	@echo "BOOT-CC  $<"
+	$(CC) $(BOOT_CPPFLAGS) $(BOOT_CFLAGS) -c $< -o $@
 
-# Link to create shared object (now uses all object files)
-$(SO_TARGET): $(ALL_OBJ_FILES) $(GNUEFI_LIB_DIR)/libefi.a $(GNUEFI_GNUEFI_DIR)/libgnuefi.a | $(BUILD_DIR)
-	@echo "LD    $@"
-	$(LD) $(LDFLAGS) $(GNUEFI_CRT_OBJS) $(ALL_OBJ_FILES) -o $@ \
+# Compile bootloader assembly files
+$(BOOT_BUILD_DIR)/%.o: $(BOOT_SRC_DIR)/%.S | $(BOOT_BUILD_DIR)
+	@mkdir -p $(dir $@)
+	@echo "BOOT-AS  $<"
+	$(CC) $(BOOT_CPPFLAGS) $(BOOT_CFLAGS) -c $< -o $@
+
+# Link bootloader shared object
+$(BOOTLOADER_SO): $(BOOT_OBJ_FILES) $(GNUEFI_LIB_DIR)/libefi.a $(GNUEFI_GNUEFI_DIR)/libgnuefi.a | $(BUILD_DIR)
+	@echo "BOOT-LD  $@"
+	$(LD) $(BOOT_LDFLAGS) $(GNUEFI_CRT_OBJS) $(BOOT_OBJ_FILES) -o $@ \
 		-lgnuefi -lefi
 
-# Convert to EFI executable  
-$(EFI_TARGET): $(SO_TARGET)
+# Convert to EFI executable
+$(BOOTLOADER_EFI): $(BOOTLOADER_SO)
+	@echo "BOOT-EFI $@"
 	$(OBJCOPY) -j .text -j .sdata -j .data -j .dynamic -j .dynsym \
 		-j .rel -j .rela -j .rel.* -j .rela.* -j .reloc \
 		-O binary $< $@
 	$(SIZE) $<
 	@echo ""
-	@echo "EFI application built successfully: $@"
-	@echo ""
+	@echo "Bootloader built: $@"
 
-# Run with QEMU
-run: $(EFI_TARGET)
+# =============================================================================
+# Kernel Build Rules
+# =============================================================================
+
+# Compile kernel C files
+$(KERNEL_BUILD_DIR)/%.o: $(KERNEL_SRC_DIR)/%.c | $(KERNEL_BUILD_DIR)
+	@mkdir -p $(dir $@)
+	@echo "KERN-CC  $<"
+	$(CC) $(KERNEL_CPPFLAGS) $(KERNEL_CFLAGS) -c $< -o $@
+
+# Compile kernel assembly files
+$(KERNEL_BUILD_DIR)/%.o: $(KERNEL_SRC_DIR)/%.S | $(KERNEL_BUILD_DIR)
+	@mkdir -p $(dir $@)
+	@echo "KERN-AS  $<"
+	$(CC) $(KERNEL_CPPFLAGS) $(KERNEL_CFLAGS) -c $< -o $@
+
+# Create simple kernel linker script
+kernel.lds: | $(BUILD_DIR)
+	@echo "GEN-LD   $@"
+	@echo 'ENTRY(_start)' > $@
+	@echo 'SECTIONS' >> $@
+	@echo '{' >> $@
+	@echo '    . = 0x40080000;' >> $@
+	@echo '    ' >> $@
+	@echo '    .text : {' >> $@
+	@echo '        *(.text*)' >> $@
+	@echo '    }' >> $@
+	@echo '    ' >> $@
+	@echo '    .rodata : {' >> $@
+	@echo '        *(.rodata*)' >> $@
+	@echo '    }' >> $@
+	@echo '    ' >> $@
+	@echo '    .data : {' >> $@
+	@echo '        *(.data*)' >> $@
+	@echo '    }' >> $@
+	@echo '    ' >> $@
+	@echo '    .bss : {' >> $@
+	@echo '        *(.bss*)' >> $@
+	@echo '    }' >> $@
+	@echo '}' >> $@
+
+# Link kernel ELF
+$(KERNEL_ELF): $(KERNEL_OBJ_FILES) kernel.lds | $(BUILD_DIR)
+	@echo "KERN-LD  $@"
+	$(LD) $(KERNEL_LDFLAGS) $(KERNEL_OBJ_FILES) -o $@
+	$(SIZE) $@
+	@echo ""
+	@echo "Kernel built: $@"
+
+# =============================================================================
+# Run and Test
+# =============================================================================
+
+# Run bootloader (future: bootloader will load kernel)
+run: $(BOOTLOADER_EFI)
 	@if [ ! -f /usr/share/AAVMF/AAVMF_CODE.fd ]; then \
 		echo "ARM64 UEFI firmware not found. Install with:"; \
-		echo "sudo apt install qemu-efi-aarch64"; \
+		echo "   sudo apt install qemu-efi-aarch64"; \
 		exit 1; \
 	fi
 	@if [ ! -f AAVMF_VARS_copy.fd ]; then \
 		cp /usr/share/AAVMF/AAVMF_VARS.fd AAVMF_VARS_copy.fd; \
 	fi
 	@mkdir -p esp/EFI/BOOT
-	@cp $(EFI_TARGET) esp/EFI/BOOT/BOOTAA64.EFI
+	@cp $(BOOTLOADER_EFI) esp/EFI/BOOT/BOOTAA64.EFI
+	@echo "Starting QEMU with bootloader..."
 	qemu-system-aarch64 \
 		-machine virt,gic-version=3 \
 		-cpu cortex-a57 \
@@ -132,57 +227,54 @@ run: $(EFI_TARGET)
 		-nographic
 
 # Debug version
-debug: CFLAGS += -g -DDEBUG
-debug: $(EFI_TARGET)
+debug: BOOT_CFLAGS += -g -DDEBUG
+debug: KERNEL_CFLAGS += -g -DDEBUG
+debug: all
 
-# Clean build artifacts
+# =============================================================================
+# Clean and Info Display
+# =============================================================================
+
 clean:
 	@echo "Cleaning build artifacts..."
-	@rm -rf $(BUILD_DIR) esp
+	@rm -rf $(BUILD_DIR) esp kernel.lds
 	@rm -f AAVMF_VARS_copy.fd
 	@$(MAKE) -C $(GNUEFI_DIR) clean > /dev/null 2>&1 || true
 	@echo "Clean completed"
 
-# Show discovered source files (for debugging)
-show-sources:
-	@echo "Discovered source files:"
-	@echo "C files:"
-	@$(foreach file,$(SRC_C_FILES),echo "  $(file)";)
-	@echo "Assembly files:"
-	@$(foreach file,$(SRC_S_FILES),echo "  $(file)";)
-	@echo "Header files:"
-	@$(foreach file,$(SRC_H_FILES),echo "  $(file)";)
-	@echo "Object files will be:"
-	@$(foreach file,$(ALL_OBJ_FILES),echo "  $(file)";)
-	@echo "Include directories:"
-	@$(foreach dir,$(SRC_INCLUDE_DIRS),echo "  $(dir)";)
+show-info:
+	@echo "RLOS Separated Build System"
+	@echo ""
+	@echo "Bootloader sources:"
+	@$(foreach file,$(BOOT_C_FILES),echo "  $(file)";)
+	@echo "Bootloader objects:"
+	@$(foreach file,$(BOOT_OBJ_FILES),echo "  $(file)";)
+	@echo ""
+	@echo "Kernel sources:"
+	@$(foreach file,$(KERNEL_C_FILES),echo "  $(file)";)
+	@echo "Kernel objects:"  
+	@$(foreach file,$(KERNEL_OBJ_FILES),echo "  $(file)";)
+	@echo ""
+	@echo "Outputs:"
+	@echo "  Bootloader: $(BOOTLOADER_EFI)"
+	@echo "  Kernel: $(KERNEL_ELF)"
 
-# Show build directories
-show-dirs:
-	@echo "Source directories:"
-	@$(foreach dir,$(SRC_SUBDIRS),echo "  $(dir)";)
-
-# Show help
 help:
-	@echo "RLOS Build System"
+	@echo "RLOS Separated Build System"
 	@echo ""
 	@echo "Targets:"
-	@echo "  all         - Build the EFI application (default)"
-	@echo "  run         - Build and run with QEMU"
-	@echo "  debug       - Build debug version"
-	@echo "  clean       - Clean all build artifacts"
-	@echo "  show-sources - Show all discovered source files"
-	@echo "  show-dirs   - Show all discovered source directories"
-	@echo "  help        - Show this help message"
+	@echo "  all        - Build both bootloader and kernel (default)"
+	@echo "  bootloader - Build only UEFI bootloader (.efi)"
+	@echo "  kernel     - Build only kernel (.elf)"
+	@echo "  run        - Build and run bootloader in QEMU"
+	@echo "  debug      - Build debug versions"
+	@echo "  clean      - Clean all build artifacts"
+	@echo "  show-info  - Show discovered files and build info"
+	@echo "  help       - Show this help"
 	@echo ""
-	@echo "Features:"
-	@echo "  - Automatic source file discovery in src/"
-	@echo "  - Supports C (.c), Assembly (.S), and Header (.h) files"
-	@echo "  - Automatic header file include path generation"
-	@echo "  - Preserves directory structure in build/"
-	@echo "  - No manual Makefile updates needed for new files"
+	@echo "Architecture:"
+	@echo "  src/boot/     -> build/bootloader.efi (UEFI App)"
+	@echo "  src/kernel/   -> build/kernel.elf (Bare Metal)"
 	@echo ""
-	@echo "Requirements:"
-	@echo "  - aarch64-linux-gnu-gcc toolchain"
-	@echo "  - qemu-system-aarch64"
-	@echo "  - qemu-efi-aarch64 (for UEFI firmware)"
+	@echo "Philosophy: 'Good programmers worry about data structures.'"
+	@echo "            Clean separation = Good taste!"

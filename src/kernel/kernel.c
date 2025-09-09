@@ -1,103 +1,149 @@
-//==================================================================================================================================
-//  RLOS: Simple ARM64 UEFI Kernel
-//==================================================================================================================================
-//
-// A simple "Hello, Kernel!" program that runs as a UEFI application on ARM64.
-// Based on the Simple UEFI Bootloader project structure.
-//
-
-#include <efi.h>
-#include <efilib.h>
 #include "kernel.h"
 
-//==================================================================================================================================
-//  efi_main: UEFI Application Entry Point
-//==================================================================================================================================
-//
-// This is the standard UEFI application entry point. UEFI firmware will call this function
-// when our application is loaded.
-//
+// QEMU ARM64 virt machine UART0 (PL011) base address
+#define UART0_BASE    0x09000000
+#define UART0_DR      (UART0_BASE + 0x00)  // Data register
+#define UART0_FR      (UART0_BASE + 0x18)  // Flag register
+#define UART0_IBRD    (UART0_BASE + 0x24)  // Integer baud rate divisor
+#define UART0_FBRD    (UART0_BASE + 0x28)  // Fractional baud rate divisor
+#define UART0_LCRH    (UART0_BASE + 0x2C)  // Line control register
+#define UART0_CR      (UART0_BASE + 0x30)  // Control register
 
-EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
-{
-    // ImageHandle is this program's own EFI_HANDLE
-    // SystemTable is the EFI system table of the machine
+// UART Flag register bits
+#define UART_FR_TXFF  (1 << 5)  // Transmit FIFO full
 
-    // Initialize the GNU-EFI library
-    InitializeLib(ImageHandle, SystemTable);
-    /*
-    From InitializeLib:
-    ST = SystemTable;
-    BS = SystemTable->BootServices;
-    RT = SystemTable->RuntimeServices;
-    */
+// Basic memory-mapped I/O functions
+static inline void mmio_write32(unsigned long addr, unsigned int value) {
+    *(volatile unsigned int*)addr = value;
+}
 
-    EFI_STATUS Status;
+static inline unsigned int mmio_read32(unsigned long addr) {
+    return *(volatile unsigned int*)addr;
+}
 
-    // Disable watchdog timer to prevent automatic reboot during debugging
-    Status = BS->SetWatchdogTimer(0, 0, 0, NULL);
-    if(EFI_ERROR(Status))
-    {
-        Print(L"Error stopping watchdog, timeout still counting down...\r\n");
+// Initialize UART for output
+void uart_init(void) {
+    // Disable UART
+    mmio_write32(UART0_CR, 0);
+    
+    // Set baud rate to 115200 (assuming 24MHz clock)
+    // IBRD = 24000000 / (16 * 115200) = 13
+    // FBRD = int((0.020833... * 64) + 0.5) = 1
+    mmio_write32(UART0_IBRD, 13);
+    mmio_write32(UART0_FBRD, 1);
+    
+    // Set line control: 8 bits, no parity, 1 stop bit, FIFOs enabled
+    mmio_write32(UART0_LCRH, (3 << 5) | (1 << 4));
+    
+    // Enable UART, TX and RX
+    mmio_write32(UART0_CR, (1 << 0) | (1 << 8) | (1 << 9));
+}
+
+// Send a single character
+void uart_putc(char c) {
+    // Wait until TX FIFO is not full
+    while (mmio_read32(UART0_FR) & UART_FR_TXFF);
+    
+    // Write character to data register
+    mmio_write32(UART0_DR, c);
+}
+
+// Send a string
+void uart_puts(const char* str) {
+    while (*str) {
+        if (*str == '\n') {
+            uart_putc('\r');  // Add carriage return before newline
+        }
+        uart_putc(*str++);
     }
+}
 
-    // Clear the screen
-    Status = ST->ConOut->ClearScreen(ST->ConOut);
-    if(EFI_ERROR(Status))
-    {
-        Print(L"Error clearing screen...\r\n");
+// Simple hex to string conversion
+void uart_put_hex(unsigned long value) {
+    const char hex_chars[] = "0123456789ABCDEF";
+    uart_puts("0x");
+    
+    for (int i = 60; i >= 0; i -= 4) {
+        uart_putc(hex_chars[(value >> i) & 0xF]);
     }
+}
 
-    // Print our hello message
-    Print(L"\r\n");
-    Print(L"==============================================\r\n");
-    Print(L"  ____  _     ___  ____                       \r\n");
-    Print(L" |  _ \\| |   / _ \\/ ___|                    \r\n");
-    Print(L" | |_) | |  | | | \\___ \\                    \r\n");
-    Print(L" |  _ <| |__| |_| |___) |                     \r\n");
-    Print(L" |_| \\_\\_____\\___/|____/                   \r\n");
-    Print(L"                                              \r\n");
-    Print(L"==============================================\r\n");
-    Print(L"\r\n");
+// Simple decimal to string conversion  
+void uart_put_dec(unsigned long value) {
+    if (value == 0) {
+        uart_putc('0');
+        return;
+    }
+    
+    char buffer[32];
+    int pos = 0;
+    
+    while (value > 0) {
+        buffer[pos++] = '0' + (value % 10);
+        value /= 10;
+    }
+    
+    // Print in reverse order
+    for (int i = pos - 1; i >= 0; i--) {
+        uart_putc(buffer[i]);
+    }
+}
 
+// ARM64 kernel entry point - called by bootloader
+void _start(void) {
+    // Initialize UART first for output
+    uart_init();
+    
+    // Call main kernel function
+    kernel_main(0);
+    
+    // Kernel should never return, but if it does, halt
+    while(1) {
+        __asm__ volatile("wfe");  // Wait for event (low power)
+    }
+}
+
+void kernel_main(void* memory_map){
+    // Mark parameter as used to avoid compiler warning
+    (void)memory_map;
+    
+    // Print kernel startup banner
+    uart_puts("\n");
+    uart_puts("==============================================\n");
+    uart_puts("  ____  _     ___  ____                       \n");
+    uart_puts(" |  _ \\| |   / _ \\/ ___|                    \n");
+    uart_puts(" | |_) | |  | | | \\___ \\                    \n");
+    uart_puts(" |  _ <| |__| |_| |___) |                     \n");
+    uart_puts(" |_| \\_\\_____\\___/|____/                   \n");
+    uart_puts("                                              \n");
+    uart_puts("==============================================\n");
+    uart_puts("\n");
+    
     // Print system information
-    Print(L"System Information:\r\n");
-    Print(L"  UEFI Revision: %u.%u", ST->Hdr.Revision >> 16, (ST->Hdr.Revision & 0xFFFF) / 10);
-    if((ST->Hdr.Revision & 0xFFFF) % 10)
-    {
-        Print(L".%u\r\n", (ST->Hdr.Revision & 0xFFFF) % 10);
-    }
-    else
-    {
-        Print(L"\r\n");
-    }
-    Print(L"  Firmware Vendor: %s\r\n", ST->FirmwareVendor);
-    Print(L"  Firmware Revision: 0x%08x\r\n", ST->FirmwareRevision);
-
-    // Get current time
-    EFI_TIME Now;
-    Status = RT->GetTime(&Now, NULL);
-    if(!EFI_ERROR(Status))
-    {
-        Print(L"  Current Time: %02hhu/%02hhu/%04hu - %02hhu:%02hhu:%02hhu\r\n", 
-              Now.Month, Now.Day, Now.Year, Now.Hour, Now.Minute, Now.Second);
-    }
-
-    Print(L"\r\n");
-    Print(L"Kernel initialization completed successfully!\r\n");
-    Print(L"RLOS is now running...\r\n");
-    Print(L"\r\n");
-    Print(L"System Status: ACTIVE\r\n");
-    Print(L"Kernel Mode: Running\r\n");
-    Print(L"Boot Services: Available\r\n");
-    Print(L"\r\n");
-    Print(L"=== RLOS Kernel Main Loop Started ===\r\n");
-    Print(L"(Press Ctrl+C or close QEMU to exit)\r\n");
-    Print(L"\r\n");
-
-    while(1)
-    {   
-        
+    uart_puts("System Information:\n");
+    uart_puts("  Architecture: ARM64\n");
+    uart_puts("  Environment: Bare Metal\n");
+    uart_puts("  Memory Map Address: ");
+    uart_put_hex((unsigned long)memory_map);
+    uart_puts("\n");
+    uart_puts("\n");
+    
+    // Get current time - not available in bare metal, show placeholder
+    uart_puts("  Current Time: [Not available in bare metal mode]\n");
+    
+    uart_puts("\n");
+    uart_puts("Kernel initialization completed successfully!\n");
+    uart_puts("RLOS is now running...\n");
+    uart_puts("\n");
+    uart_puts("System Status: ACTIVE\n");
+    uart_puts("Kernel Mode: Bare Metal\n");
+    uart_puts("Boot Services: Unavailable (Exited)\n");
+    uart_puts("\n");
+    uart_puts("=== RLOS Kernel Main Loop Started ===\n");
+    uart_puts("(Press Ctrl+C or close QEMU to exit)\n");
+    uart_puts("\n");
+    
+    while(1) {    
         // In a real kernel, this is where we would:
         // - Handle interrupts
         // - Process scheduler
@@ -105,7 +151,4 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
         // - I/O operations
         // - System calls
     }
-
-    // This line should never be reached in normal operation
-    return EFI_SUCCESS;
 }
