@@ -8,6 +8,7 @@
 
 #include <efi.h>
 #include <efilib.h>
+#include "kernel.h"
 
 //==================================================================================================================================
 //  efi_main: UEFI Application Entry Point
@@ -50,10 +51,13 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     // Print our hello message
     Print(L"\r\n");
     Print(L"==============================================\r\n");
-    Print(L"         RLOS - ARM64 UEFI Kernel            \r\n");
+    Print(L"  ____  _     ___  ____                       \r\n");
+    Print(L" |  _ \\| |   / _ \\/ ___|                    \r\n");
+    Print(L" | |_) | |  | | | \\___ \\                    \r\n");
+    Print(L" |  _ <| |__| |_| |___) |                     \r\n");
+    Print(L" |_| \\_\\_____\\___/|____/                   \r\n");
+    Print(L"                                              \r\n");
     Print(L"==============================================\r\n");
-    Print(L"\r\n");
-    Print(L"Hello, Kernel!\r\n");
     Print(L"\r\n");
 
     // Print system information
@@ -91,19 +95,8 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     Print(L"(Press Ctrl+C or close QEMU to exit)\r\n");
     Print(L"\r\n");
 
-    // Main kernel loop - like a real OS
-    UINTN counter = 0;
     while(1)
-    {
-        // Heartbeat every 30 seconds
-        if(counter % 300 == 0)  // 300 * 100ms = 30 seconds
-        {
-            Print(L"[KERNEL] Heartbeat - System uptime: %llu cycles\r\n", counter / 10);
-        }
-        
-        // Small delay to prevent overwhelming output
-        BS->Stall(100000); // 100ms delay
-        counter++;
+    {   
         
         // In a real kernel, this is where we would:
         // - Handle interrupts
