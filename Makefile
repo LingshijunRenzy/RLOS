@@ -118,36 +118,6 @@ $(KERNEL_BUILD_DIR)/%.o: $(KERNEL_SRC_DIR)/%.S | $(KERNEL_BUILD_DIR)
 	@echo "KERN-AS  $<"
 	$(CC) $(KERNEL_CPPFLAGS) $(KERNEL_CFLAGS) -c $< -o $@
 
-kernel.lds: | $(BUILD_DIR)
-	@echo "GEN-LD   $@"
-	@echo 'ENTRY(_start)' > $@
-	@echo 'SECTIONS' >> $@
-	@echo '{' >> $@
-	@echo '    . = 0x40080000;' >> $@
-	@echo '    ' >> $@
-	@echo '    .text : {' >> $@
-	@echo '        *(.text*)' >> $@
-	@echo '    }' >> $@
-	@echo '    ' >> $@
-	@echo '    .rodata : {' >> $@
-	@echo '        *(.rodata*)' >> $@
-	@echo '    }' >> $@
-	@echo '    ' >> $@
-	@echo '    .data : {' >> $@
-	@echo '        *(.data*)' >> $@
-	@echo '    }' >> $@
-	@echo '    ' >> $@
-	@echo '    .bss : {' >> $@
-	@echo '        *(.bss*)' >> $@
-	@echo '        ' >> $@
-	@echo '        /* Initial kernel stack */' >> $@
-	@echo '        . = ALIGN(16);' >> $@
-	@echo '        _init_stack = .;' >> $@
-	@echo '        . += 0x10000;  /* 64KB stack */' >> $@
-	@echo '        _init_stack_top = .;' >> $@
-	@echo '    }' >> $@
-	@echo '}' >> $@
-
 $(KERNEL_ELF): $(KERNEL_OBJ_FILES) kernel.lds | $(BUILD_DIR)
 	@echo "KERN-LD  $@"
 	$(LD) $(KERNEL_LDFLAGS) $(KERNEL_OBJ_FILES) -o $@
@@ -178,7 +148,7 @@ run: $(BOOTLOADER_EFI)
 # Clean and Info Display
 clean:
 	@echo "Cleaning build artifacts..."
-	@rm -rf $(BUILD_DIR) esp kernel.lds
+	@rm -rf $(BUILD_DIR) esp
 	@rm -f AAVMF_VARS_copy.fd
 	@$(MAKE) -C $(GNUEFI_DIR) clean > /dev/null 2>&1 || true
 	@echo "Clean completed."
@@ -190,7 +160,7 @@ show-info:
 	@$(foreach file,$(BOOT_OBJ_FILES),echo "  $(file)";)
 	@echo "Kernel sources:"
 	@$(foreach file,$(KERNEL_C_FILES),echo "  $(file)";)
-	@echo "Kernel objects:"  
+	@echo "Kernel objects:"
 	@$(foreach file,$(KERNEL_OBJ_FILES),echo "  $(file)";)
 	@echo "Outputs:"
 	@echo "  Bootloader: $(BOOTLOADER_EFI)"
