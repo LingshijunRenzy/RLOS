@@ -1,8 +1,6 @@
 #ifndef RLOS_STDINT_H
 #define RLOS_STDINT_H
 
-/* Minimal fixed-width integer types for freestanding kernel build */
-
 typedef __INT8_TYPE__ int8_t;
 typedef __INT16_TYPE__ int16_t;
 typedef __INT32_TYPE__ int32_t;
@@ -21,6 +19,8 @@ typedef __UINTMAX_TYPE__ uintmax_t;
 
 typedef __SIZE_TYPE__ size_t;
 typedef __PTRDIFF_TYPE__ ptrdiff_t;
+
+typedef uint64_t uintn_t;
 
 #define UINT8_MAX __UINT8_MAX__
 #define UINT16_MAX __UINT16_MAX__

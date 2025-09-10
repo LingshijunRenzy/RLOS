@@ -1,6 +1,8 @@
 #ifndef KERNEL_H
 #define KERNEL_H
 
-void kernel_main(void* fdt);
+#include "boot_info.h"
+
+void kernel_main(boot_info_t* boot_info);
 
 #endif
