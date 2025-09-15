@@ -80,8 +80,29 @@ void _start(void) {
     
     uart_init();
     
+    uart_puts("Kernel Physical Load Info:\n");
+    uart_puts("  Physical Base: ");
+    uart_put_hex(boot_info->kernel_info.physical_base);
+    uart_puts("\n  Entry Offset: ");
+    uart_put_hex(boot_info->kernel_info.entry_offset);
+    uart_puts("\n  Kernel Size: ");
+    uart_put_hex(boot_info->kernel_info.size);
+    uart_puts("\n  Segments Count: ");
+    uart_put_dec(boot_info->kernel_info.segments_count);
+    uart_puts("\n");
+    
     extern char _init_stack_top[];
-    __asm__ volatile ("mov sp, %0" :: "r" (_init_stack_top) : "memory");
+    uint64_t stack_offset = (uint64_t)_init_stack_top - 0;
+    uint64_t stack_physical = boot_info->kernel_info.physical_base + stack_offset;
+    
+    uart_puts("  Stack Physical: ");
+    uart_put_hex(stack_physical);
+    uart_puts("\n\n");
+    
+    // TODO: 在这里可以设置MMU，建立虚拟内存映射
+    // 将物理地址映射到高地址空间 (0xFFFF800000000000+)
+    
+    __asm__ volatile ("mov sp, %0" :: "r" (stack_physical) : "memory");
     
     kernel_main(boot_info);
     
@@ -106,16 +127,22 @@ void kernel_main(boot_info_t* boot_info){
     
     uart_puts("System Information:\n");
     uart_puts("  Architecture: ARM64\n");
-    uart_puts("  Environment: Bare Metal\n");
+    uart_puts("  Environment: Bare Metal (Dynamic Load)\n");
     uart_puts("  Boot Info Address: ");
     uart_put_hex((unsigned long)boot_info);
+    uart_puts("\n");
+    uart_puts("  Kernel Physical Base: ");
+    uart_put_hex(boot_info->kernel_info.physical_base);
+    uart_puts("\n");
+    uart_puts("  Kernel Size: ");
+    uart_put_hex(boot_info->kernel_info.size);
     uart_puts("\n");
     if (boot_info && boot_info->memory_map_base) {
         uart_puts("  Memory Map Address: ");
         uart_put_hex((unsigned long)boot_info->memory_map_base);
         uart_puts("\n");
         uart_puts("  Memory Descriptors: ");
-        uart_put_hex(boot_info->memory_map_desc_count);
+        uart_put_dec(boot_info->memory_map_desc_count);
         uart_puts("\n");
     }
     uart_puts("\n");

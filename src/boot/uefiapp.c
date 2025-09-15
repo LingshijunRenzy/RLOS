@@ -12,7 +12,7 @@
 
 typedef void (*kernel_entry_t)(boot_info_t* boot_info);
 
-EFI_STATUS LoadKernelFile(EFI_HANDLE ImageHandle, void** kernel_entry, UINTN* kernel_size);
+EFI_STATUS LoadKernelFile(EFI_HANDLE ImageHandle, void** kernel_entry, UINTN* kernel_size, kernel_load_info_t* kernel_info);
 EFI_STATUS GetFinalMemoryMap(EFI_MEMORY_DESCRIPTOR** MemoryMap, UINTN* MapSize, UINTN* MapKey, UINTN* DescriptorSize);
 EFI_STATUS ConvertMemoryMap(EFI_MEMORY_DESCRIPTOR* EfiMemoryMap, UINTN EfiMapSize, UINTN EfiDescSize, boot_info_t* boot_info);
 
@@ -118,13 +118,16 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 
     void* kernel_entry = NULL;
     UINTN kernel_size = 0;
+    kernel_load_info_t temp_kernel_info = {0}; // 临时结构
     Print(L"Loading kernel...\r\n");
-    Status = LoadKernelFile(ImageHandle, &kernel_entry, &kernel_size);
+    Status = LoadKernelFile(ImageHandle, &kernel_entry, &kernel_size, &temp_kernel_info);
     if (EFI_ERROR(Status)) {
         Print(L"Failed to load kernel: %r\r\n", Status);
         return Status;
     }
     Print(L"Kernel loaded at: 0x%lx, size: %lu bytes\r\n", (UINT64)kernel_entry, kernel_size);
+    Print(L"Physical base: 0x%lx, entry offset: 0x%lx\r\n", 
+          temp_kernel_info.physical_base, temp_kernel_info.entry_offset);
 
     EFI_MEMORY_DESCRIPTOR* FinalMemoryMap = NULL;
     UINTN FinalMapSize = 0;
@@ -138,6 +141,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     }
 
     boot_info_t boot_info = {0};
+    boot_info.kernel_info = temp_kernel_info; // 复制内核加载信息
     Print(L"Converting memory map for kernel...\r\n");
     Status = ConvertMemoryMap(FinalMemoryMap, FinalMapSize, FinalDescriptorSize, &boot_info);
     if (EFI_ERROR(Status)) {
@@ -157,7 +161,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     return EFI_SUCCESS;
 }
 
-EFI_STATUS LoadKernelFile(EFI_HANDLE ImageHandle, void** kernel_entry, UINTN* kernel_size)
+EFI_STATUS LoadKernelFile(EFI_HANDLE ImageHandle, void** kernel_entry, UINTN* kernel_size, kernel_load_info_t* kernel_info)
 {
     EFI_STATUS Status;
     EFI_LOADED_IMAGE_PROTOCOL* LoadedImage = NULL;
@@ -166,6 +170,7 @@ EFI_STATUS LoadKernelFile(EFI_HANDLE ImageHandle, void** kernel_entry, UINTN* ke
     EFI_FILE_PROTOCOL* KernelFile = NULL;
     EFI_PHYSICAL_ADDRESS TempBuffer = 0;
     UINTN TempPages = 0;
+    EFI_PHYSICAL_ADDRESS kernel_physical_base = 0;
     
     Status = BS->HandleProtocol(ImageHandle, &LoadedImageProtocol, (void**)&LoadedImage);
     if (EFI_ERROR(Status)) {
@@ -262,49 +267,73 @@ EFI_STATUS LoadKernelFile(EFI_HANDLE ImageHandle, void** kernel_entry, UINTN* ke
         elf_header->e_ident[1] != 'E' || 
         elf_header->e_ident[2] != 'L' || 
         elf_header->e_ident[3] != 'F') {
-        Print(L"Invalid ELF magic number\\r\\n");
+        Print(L"Invalid ELF magic number\r\n");
         Status = EFI_INVALID_PARAMETER;
         goto cleanup;
     }
     
-    Print(L"Valid ELF file detected\\r\\n");
-    Print(L"Entry point: 0x%lx\\r\\n", elf_header->e_entry);
-    Print(L"Program headers: %u at offset 0x%lx\\r\\n", elf_header->e_phnum, elf_header->e_phoff);
+    Print(L"Valid ELF file detected\r\n");
+    Print(L"Entry point: 0x%lx\r\n", elf_header->e_entry);
+    Print(L"Program headers: %u at offset 0x%lx\r\n", elf_header->e_phnum, elf_header->e_phoff);
     
     ELF64_Phdr* phdrs = (ELF64_Phdr*)((UINT8*)KernelAddress + elf_header->e_phoff);
     
+    UINT64 kernel_min_addr = UINT64_MAX;
+    UINT64 kernel_max_addr = 0;
+    
     for (UINT16 i = 0; i < elf_header->e_phnum; i++) {
         if (phdrs[i].p_type == PT_LOAD) {
-            Print(L"Loading segment %u: vaddr=0x%lx, filesz=0x%lx, memsz=0x%lx\\r\\n", 
-                  i, phdrs[i].p_vaddr, phdrs[i].p_filesz, phdrs[i].p_memsz);
+            UINT64 seg_start = phdrs[i].p_vaddr;
+            UINT64 seg_end = seg_start + phdrs[i].p_memsz;
             
-            EFI_PHYSICAL_ADDRESS SegmentAddr = phdrs[i].p_vaddr;
-            UINTN SegmentPages = (phdrs[i].p_memsz + EFI_PAGE_SIZE - 1) / EFI_PAGE_SIZE;
-            
-            Status = BS->AllocatePages(AllocateAddress, EfiLoaderCode, SegmentPages, &SegmentAddr);
-            if (EFI_ERROR(Status)) {
-                Print(L"Failed to allocate memory for segment at 0x%lx: %r\\r\\n", phdrs[i].p_vaddr, Status);
-                goto cleanup;
-            }
-            
-            UINT8* src = (UINT8*)KernelAddress + phdrs[i].p_offset;
-            UINT8* dst = (UINT8*)phdrs[i].p_vaddr;
-            
-            for (UINT64 j = 0; j < phdrs[i].p_filesz; j++) {
-                dst[j] = src[j];
-            }
-            
-            for (UINT64 j = phdrs[i].p_filesz; j < phdrs[i].p_memsz; j++) {
-                dst[j] = 0;
-            }
-            
-            Print(L"Segment %u loaded at 0x%lx\\r\\n", i, phdrs[i].p_vaddr);
+            if (seg_start < kernel_min_addr) kernel_min_addr = seg_start;
+            if (seg_end > kernel_max_addr) kernel_max_addr = seg_end;
         }
     }
     
-    *kernel_entry = (void*)elf_header->e_entry;
+    UINT64 total_kernel_size = kernel_max_addr - kernel_min_addr;
+    UINTN total_pages = (total_kernel_size + EFI_PAGE_SIZE - 1) / EFI_PAGE_SIZE;
     
-    Print(L"Kernel loaded successfully at 0x%lx\\r\\n", KernelAddress);
+    Print(L"Kernel address range: 0x%lx - 0x%lx (size: 0x%lx)\r\n", 
+          kernel_min_addr, kernel_max_addr, total_kernel_size);
+    
+    Status = BS->AllocatePages(AllocateAnyPages, EfiLoaderCode, total_pages, &kernel_physical_base);
+    if (EFI_ERROR(Status)) {
+        Print(L"Failed to allocate kernel memory: %r\r\n", Status);
+        goto cleanup;
+    }
+    
+    Print(L"Kernel allocated at physical: 0x%lx, size: 0x%lx\r\n", kernel_physical_base, total_kernel_size);
+    
+    for (UINT16 i = 0; i < elf_header->e_phnum; i++) {
+        if (phdrs[i].p_type == PT_LOAD) {
+            Print(L"Loading segment %u: vaddr=0x%lx, filesz=0x%lx, memsz=0x%lx\r\n", 
+                  i, phdrs[i].p_vaddr, phdrs[i].p_filesz, phdrs[i].p_memsz);
+            
+            UINT64 segment_offset = phdrs[i].p_vaddr - kernel_min_addr;
+            UINT8* physical_dst = (UINT8*)(kernel_physical_base + segment_offset);
+            UINT8* src = (UINT8*)KernelAddress + phdrs[i].p_offset;
+            
+            for (UINT64 j = 0; j < phdrs[i].p_filesz; j++) {
+                physical_dst[j] = src[j];
+            }
+            
+            for (UINT64 j = phdrs[i].p_filesz; j < phdrs[i].p_memsz; j++) {
+                physical_dst[j] = 0;
+            }
+            
+            Print(L"Segment %u loaded at physical: 0x%lx\r\n", i, (UINT64)physical_dst);
+        }
+    }
+    
+    kernel_info->physical_base = kernel_physical_base;
+    kernel_info->size = total_kernel_size;
+    kernel_info->entry_offset = elf_header->e_entry - kernel_min_addr;
+    kernel_info->segments_count = elf_header->e_phnum;
+    
+    *kernel_entry = (void*)(kernel_physical_base + kernel_info->entry_offset);
+    
+    Print(L"Kernel loaded successfully at 0x%lx\r\n", KernelAddress);
     Status = EFI_SUCCESS;
     
 cleanup:
@@ -314,6 +343,11 @@ cleanup:
     
     if (TempBuffer) {
         BS->FreePages(TempBuffer, TempPages);
+    }
+    
+    if (EFI_ERROR(Status) && kernel_physical_base) {
+        UINTN pages_to_free = (kernel_info->size + EFI_PAGE_SIZE - 1) / EFI_PAGE_SIZE;
+        BS->FreePages(kernel_physical_base, pages_to_free);
     }
     
     return Status;

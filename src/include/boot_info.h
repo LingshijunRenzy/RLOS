@@ -47,10 +47,19 @@ typedef struct {
 } memory_descriptor_t;
 
 typedef struct {
+    uint64_t physical_base;     // 内核物理基地址
+    uint64_t size;              // 内核总大小  
+    uint64_t entry_offset;      // 入口点相对偏移
+    uint64_t segments_count;    // 段数量
+} kernel_load_info_t;
+
+typedef struct {
     memory_descriptor_t *memory_map_base;
     uintn_t memory_map_size;
     uintn_t memory_map_desc_size;
     uintn_t memory_map_desc_count;
+    
+    kernel_load_info_t kernel_info;
 } boot_info_t;
 
 #endif /* RLOS_BOOT_INFO_H */
